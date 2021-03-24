@@ -1,34 +1,42 @@
-Assignment name  : get_next_line
-Expected files   : get_next_line.c get_next_line.h
-Allowed functions: read, free, malloc
+Assignment name  : mini_serv
+Expected files   : mini_serv.c
+Allowed functions: write, close, select, socket, accept, listen, send, recv, bind, strstr, malloc, realloc, free, calloc, bzero, atoi, sprintf, strlen, exit, strcpy, strcat, memset
 --------------------------------------------------------------------------------
 
-Write a function will store, in the parameter "line", a line that has been read from the file descriptor 0.
+Write a program that will listen for client to connect on a certain port on 127.0.0.1 and will let clients to speak with each other
 
-Your function must be prototyped as follows: int get_next_line(char **line);
+This program will take as first argument the port to bind to
+If no argument is given, it should write in stderr "Wrong number of arguments" followed by a \n and exit with status 1
+If a System Calls returns an error before the program start accepting connection, it should write in stderr "Fatal error" followed by a \n and exit with status 1
+If you cant allocate memory it should write in stderr "Fatal error" followed by a \n and exit with status 1
 
-Your function should be memory leak free.
+Your program must be non-blocking but client can be lazy and if they don't read your message you must NOT disconnect them...
 
-What we call a "line that has been read" is a succession of 0 to n characters that end with '\n' (ascii code 0x0a) or with End Of File (EOF).
+Your program must not contains #define preproc
+Your program must only listen to 127.0.0.1
+The fd that you will receive will already be set to make 'recv' or 'send' to block if select hasn't be called before calling them, but will not block otherwise.
 
-The string stored in the parameter "line" should not contained any '\n'.
+When a client connect to the server:
+- the client will be given an id. the first client will receive the id 0 and each new client will received the last client id + 1
+- %d will be replace by this number
+- a message is sent to all the client that was connected to the server: "server: client %d just arrived\n"
 
-The parameter is the address of a pointer to a character that will be used to store the line read.
+clients must be able to send messages to your program.
+- message will only be printable characters, no need to check
+- a single message can contains multiple \n
+- when the server receive a message, it must resend it to all the other client with "client %d: " before every line!
 
-The return value can be 1, 0 or -1 depending on whether a line has been read, when the reading has been completed (meaning read has returned 0), or if an error has happened respectively.
+When a client disconnect from the server:
+- a message is sent to all the client that was connected to the server: "server: client %d just left\n"
 
-When you've reached the End Of File, you must store the current buffer in "line". If the buffer is empty you must store an empty string in "line".
+Memory or fd leaks are forbidden
 
-When you've reached the End Of File, your function should keep 0 memory allocated with malloc except the last buffer that you should have stored in "line".
+To help you, you will find the file main.c with the beginning of a server and maybe some useful functions. (Beware this file use forbidden functions or write things that must not be there in your final program)
 
-What you've stored in "line" should be free-able.
+Warning our tester is expecting that you send the messages as fast as you can. Don't do un-necessary buffer.
 
-Calling your function get_next_line in a loop will therefore allow you to read the text available on a file descriptor one line at a time until the end of the text, no matter the size of either the text or one of its lines.
+Evaluation can be a bit longer than usual...
 
-Make sure that your function behaves well when it reads from a file, from the standard output, from a redirection etc.
-
-No call to another function will be done on the file descriptor between 2 calls of get_next_line.
-
-Finally we consider that get_next_line has an undefined behavior when reading from a binary file.
-
-You should use the test.sh to help you test your get_next_line.
+Hint: you can use nc to test your program
+Hint: you should use nc to test your program
+Hint: To test you can use fcntl(fd, F_SETFL, O_NONBLOCK) but use select and NEVER check EAGAIN (man 2 send)
