@@ -6,8 +6,6 @@
 #include <stdio.h>
 #include <netinet/in.h>
 
-#include <iostream>
-
 typedef struct s_list {
     int fd;
     int id;
@@ -49,6 +47,8 @@ void add_client(int new_fd) {
     new_client->fd = new_fd;
     new_client->id = g_max_id;
     g_max_id++;
+    if (g_max_fd < new_fd)
+        g_max_fd = new_fd;
 
     if (g_clients == NULL) {
         g_clients = new_client;
@@ -125,7 +125,6 @@ int main(int argc, char ** argv) {
 
             bzero(g_msg, 50);
             sprintf(g_msg, "server: client %d just arrived\n", new_fd);
-            std::cout << g_msg << std::endl;
             send_msg(new_fd);
             FD_SET(new_fd, &g_readfds);
             add_client(new_fd);
