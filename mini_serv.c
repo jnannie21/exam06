@@ -38,7 +38,7 @@ void send_msg(int except_fd) {
     }
 }
 
-void add_client(int new_fd) {
+t_list * add_client(int new_fd) {
     t_list *temp;
     t_list *new_client;
     new_client = (t_list *)calloc(1, sizeof(*g_clients));
@@ -58,6 +58,7 @@ void add_client(int new_fd) {
             temp = temp->next;
         temp->next = new_client;
     }
+    return new_client;
 }
 
 void remove_client(t_list * client) {
@@ -101,16 +102,18 @@ int main(int argc, char ** argv) {
     address.sin_port = (port >> 8) | (port << 8);
     address.sin_addr.s_addr = 0x100007f;
 
-    if ((g_listener = socket(2, 1, 0)) == -1)
+    if ((g_listener = socket(AF_INET, SOCK_STREAM, 0)) == -1)
         fatal_error();
     if (bind(g_listener, (const struct sockaddr*)(&address), sizeof(address)) == -1)
         fatal_error();
     if (listen(g_listener, 0) == -1)
         fatal_error();
 
-    FD_ZERO(&g_readfds);
+    g_max_fd = g_listener;
 
+    FD_ZERO(&g_readfds);
     FD_SET(g_listener, &g_readfds);
+
     int new_fd;
     unsigned long len;
     while (1) {
@@ -123,18 +126,20 @@ int main(int argc, char ** argv) {
             if ((new_fd = accept(g_listener, NULL, NULL)) == -1)
                 continue;
 
+            t_list * client = add_client(new_fd);
             bzero(g_msg, 50);
-            sprintf(g_msg, "server: client %d just arrived\n", new_fd);
+            sprintf(g_msg, "server: client %d just arrived\n", client->id);
+//            write(2, g_msg, strlen(g_msg));
             send_msg(new_fd);
             FD_SET(new_fd, &g_readfds);
-            add_client(new_fd);
+
         } else {
             for (t_list * client = g_clients; client != NULL; client = client->next) {
                 if (FD_ISSET(client->fd, &g_selected_readfds)) {
                     len = recv(client->fd, g_buf, sizeof(g_buf), 0);
                     if (len <= 0) {
                         bzero(g_msg, 50);
-                        sprintf(g_msg, "server: client %d just left\n", client->fd);
+                        sprintf(g_msg, "server: client %d just left\n", client->id);
                         send_msg(client->fd);
                         FD_CLR(client->fd, &g_readfds);
                         close(client->fd);
@@ -148,7 +153,7 @@ int main(int argc, char ** argv) {
                             g_tmp[j] = g_buf[i];
                             if (g_buf[i] == '\n') {
                                 g_tmp[j] = '\0';
-                                sprintf(g_msg, "client %d: %s", get_client_id(client->fd), g_tmp);
+                                sprintf(g_msg, "client %d: %s\n", client->id, g_tmp);
                                 send_msg(client->fd);
                                 j = -1;
                             }
