@@ -1,92 +1,115 @@
-#include <sys/socket.h>
-#include <unistd.h>
+#include <errno.h>
 #include <string.h>
-#include <stdlib.h>
-#include <sys/select.h>
-#include <stdio.h>
+#include <unistd.h>
+#include <netdb.h>
+#include <sys/socket.h>
 #include <netinet/in.h>
+#include <stdlib.h>
+#include <stdio.h>
 
-typedef struct s_list {
-    int fd;
-    int id;
-    struct s_list *next;
-} t_list;
+typedef struct s_client {
+    int fd, id;
+    struct s_client * next;
+} t_client;
 
-t_list * g_clients;
-int g_listener;
 fd_set g_readfds;
-fd_set g_selected_readfds;
-fd_set g_selected_writefds;
-int g_max_fd;
-char g_buf[200000];
-char g_msg[200000];
-char g_tmp[200000];
-int g_max_id;
+fd_set readfds;
+fd_set writefds;
+int max_fd;
+int max_id;
+t_client * clients;
+int sockfd;
+char server_msg[50];
+char client_msg[200000];
+char client_buf[200000];
+char to_send[200000];
 
-void fatal_error() {
+void exit_fatal() {
     write(2, "Fatal error\n", strlen("Fatal error\n"));
+    if (sockfd)
+        close(sockfd);
     exit(1);
 }
 
-void send_msg(int except_fd) {
-    for (t_list * client = g_clients; client != NULL; client = client->next) {
-        if (client->fd != g_listener && client->fd != except_fd) {
-            if (FD_ISSET(client->fd, &g_selected_writefds)) {
-                send(client->fd, g_msg, strlen(g_msg), 0);
-            }
-        }
-    }
-}
-
-t_list * add_client(int new_fd) {
-    t_list *temp;
-    t_list *new_client;
-    new_client = (t_list *)calloc(1, sizeof(*g_clients));
+t_client * add_client(int connfd) {
+    t_client * new_client = calloc(1, sizeof(t_client));
     if (new_client == NULL)
-        fatal_error();
-    new_client->fd = new_fd;
-    new_client->id = g_max_id;
-    g_max_id++;
-    if (g_max_fd < new_fd)
-        g_max_fd = new_fd;
+        exit_fatal();
 
-    if (g_clients == NULL) {
-        g_clients = new_client;
+    new_client->fd = connfd;
+    new_client->id = max_id++;
+    if (clients == NULL) {
+        clients = new_client;
     } else {
-        temp = g_clients;
+        t_client * temp = clients;
         while (temp->next)
             temp = temp->next;
         temp->next = new_client;
     }
+
+    if (max_fd < connfd)
+        max_fd = connfd;
+    FD_SET(connfd, &g_readfds);
     return new_client;
 }
 
-void remove_client(t_list * client) {
-    if (client == g_clients) {
-        g_clients = g_clients->next;
-    } else {
-        t_list * temp = g_clients;
-        while (temp->next) {
-            if (temp->next == client) {
-                temp->next = temp->next->next;
-                break;
-            }
-            temp = temp->next;
-        }
-    }
+void send_msg(int socket, char * messsage) {
+    t_client * temp = clients;
 
-    free(client);
+    while (temp) {
+        if (temp->fd != socket && FD_ISSET(temp->fd, &writefds))
+            if (send(temp->fd, messsage, strlen(messsage), 0) < 0)
+                exit_fatal();
+        temp = temp->next;
+    }
 }
 
-int get_client_id(int fd) {
-    t_list * temp = g_clients;
+void remove_client(socket) {
+    t_client * temp = clients;
+    t_client * prev = clients;
 
-    while(temp) {
-        if (temp->fd == fd)
+    if (clients->fd == socket)
+        clients = clients->next;
+    else {
+        while (temp->fd != socket) {
+            prev = temp;
+            temp = temp->next;
+        }
+        prev->next = prev->next->next;
+    }
+
+    free(temp);
+    FD_CLR(socket, &g_readfds);
+}
+
+int get_client_id(int socket) {
+    t_client * temp = clients;
+
+    while (temp) {
+        if (temp->fd == socket)
             return temp->id;
         temp = temp->next;
     }
-    return 0;
+    return -1;
+}
+
+void resend_messages(int socket) {
+    int i = 0;
+    int j = 0;
+    while (client_msg[i] != '\0') {
+        client_buf[j] = client_msg[i];
+        if (client_msg[i] == '\n') {
+            sprintf(to_send, "client %d: %s", get_client_id(socket), client_buf);
+            send_msg(socket, to_send);
+            bzero(client_buf, strlen(client_buf));
+            bzero(to_send, strlen(to_send));
+            j = -1;
+        }
+        i++;
+        j++;
+    }
+    bzero(client_msg, strlen(client_msg));
+    bzero(client_buf, strlen(client_buf));
 }
 
 int main(int argc, char ** argv) {
@@ -95,74 +118,55 @@ int main(int argc, char ** argv) {
         exit(1);
     }
 
-    unsigned short port = atoi(argv[1]);
+    int connfd;
+    struct sockaddr_in servaddr, cli;
+    int port = atoi(argv[1]);
 
-    struct sockaddr_in address;
-    address.sin_family = 2;
-    address.sin_port = (port >> 8) | (port << 8);
-    address.sin_addr.s_addr = 0x100007f;
+    bzero(&servaddr, sizeof(servaddr));
+    servaddr.sin_family = AF_INET;
+    servaddr.sin_addr.s_addr = 0x100007f; //127.0.0.1
+    servaddr.sin_port = port >> 8 | port << 8;
 
-    if ((g_listener = socket(AF_INET, SOCK_STREAM, 0)) == -1)
-        fatal_error();
-    if (bind(g_listener, (const struct sockaddr*)(&address), sizeof(address)) == -1)
-        fatal_error();
-    if (listen(g_listener, 0) == -1)
-        fatal_error();
+    sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sockfd == -1)
+        exit_fatal();
+    if ((bind(sockfd, (const struct sockaddr *)&servaddr, sizeof(servaddr))) != 0)
+        exit_fatal();
+    if (listen(sockfd, 0) != 0)
+        exit_fatal();
 
-    g_max_fd = g_listener;
-
-    FD_ZERO(&g_readfds);
-    FD_SET(g_listener, &g_readfds);
-
-    int new_fd;
-    unsigned long len;
+    max_fd = sockfd;
+    FD_SET(sockfd, &g_readfds);
     while (1) {
-        g_selected_readfds = g_readfds;
-        g_selected_writefds = g_readfds;
-        if (select(g_max_fd + 1, &g_selected_readfds, &g_selected_writefds, NULL, NULL) == -1)
+        readfds = writefds = g_readfds;
+        if (select(max_fd + 1, &readfds, &writefds, NULL, NULL) < 0)
             continue;
 
-        if (FD_ISSET(g_listener, &g_selected_readfds)) {
-            if ((new_fd = accept(g_listener, NULL, NULL)) == -1)
-                continue;
-
-            t_list * client = add_client(new_fd);
-            bzero(g_msg, 50);
-            sprintf(g_msg, "server: client %d just arrived\n", client->id);
-//            write(2, g_msg, strlen(g_msg));
-            send_msg(new_fd);
-            FD_SET(new_fd, &g_readfds);
-
-        } else {
-            for (t_list * client = g_clients; client != NULL; client = client->next) {
-                if (FD_ISSET(client->fd, &g_selected_readfds)) {
-                    len = recv(client->fd, g_buf, sizeof(g_buf), 0);
-                    if (len <= 0) {
-                        bzero(g_msg, 50);
-                        sprintf(g_msg, "server: client %d just left\n", client->id);
-                        send_msg(client->fd);
-                        FD_CLR(client->fd, &g_readfds);
-                        close(client->fd);
-                        remove_client(client);
+        for (int socket = 0; socket <= max_fd; socket++) {
+            if (FD_ISSET(socket, &readfds)) {
+                if (socket == sockfd) {
+                    socklen_t len = sizeof(cli);
+                    connfd = accept(sockfd, (struct sockaddr *)&cli, &len);
+                    if (connfd < 0)
+                        exit_fatal();
+                    t_client * new_client = add_client(connfd);
+                    sprintf(server_msg, "server: client %d just arrived\n", new_client->id);
+                    send_msg(socket, server_msg);
+                    bzero(server_msg, sizeof(server_msg));
+                    break;
+                } else {
+                    if (recv(socket, client_msg, sizeof(client_msg), 0) <= 0) {
+                        sprintf(server_msg, "server: client %d just left\n", get_client_id(socket));
+                        remove_client(socket);
+                        send_msg(socket, server_msg);
+                        bzero(server_msg, sizeof(server_msg));
                         break;
                     } else {
-                        g_buf[len] = '\0';
-                        unsigned long i = 0;
-                        unsigned long j = 0;
-                        while (i < len) {
-                            g_tmp[j] = g_buf[i];
-                            if (g_buf[i] == '\n') {
-                                g_tmp[j] = '\0';
-                                sprintf(g_msg, "client %d: %s\n", client->id, g_tmp);
-                                send_msg(client->fd);
-                                j = -1;
-                            }
-                            i++;
-                            j++;
-                        }
+                        resend_messages(socket);
                     }
                 }
             }
         }
     }
+    return 0;
 }
